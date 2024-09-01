@@ -10,9 +10,9 @@ from raptor.embedding import EmbeddingModel
 from raptor.clustering import run_clustering, RAPTORClustering
 from raptor.node import Node, make_node, make_leaf_nodes
 from raptor.summary import summarize_cluster_texts
-from raptor.logging import get_logger, _LogLevel
+from raptor.logging import get_logger
 
-logger = get_logger(__name__, level=_LogLevel.DEBUG)
+logger = get_logger(__name__)
 
 
 class Tree(BaseModel):

@@ -9,9 +9,9 @@ import tiktoken
 from sklearn.mixture import GaussianMixture
 
 from raptor.node import Node
-from raptor.logging import get_logger, _LogLevel
+from raptor.logging import get_logger
 
-logger = get_logger(__name__, level=_LogLevel.DEBUG)
+logger = get_logger(__name__)
 
 
 class ClusterResult(NamedTuple):
