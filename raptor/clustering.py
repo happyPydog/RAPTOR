@@ -7,11 +7,9 @@ import numpy as np
 import umap
 import tiktoken
 from sklearn.mixture import GaussianMixture
+from tqdm.notebook import tqdm
 
 from raptor.node import Node
-from raptor.logging import get_logger
-
-logger = get_logger(__name__)
 
 
 class ClusterResult(NamedTuple):
@@ -52,8 +50,6 @@ class RAPTORClustering:
             n_components=self.reduction_component_size,
             n_neighbors=global_n_neighbors,
         )
-
-        logger.debug(f"Number of global clusters: {global_n_clusters}")
 
         # * Local clustering
         for global_cluster_idx in range(global_n_clusters):
@@ -98,14 +94,13 @@ class RAPTORClustering:
 
             total_cluster_count += n_local_clusters
 
-        logger.debug(f"Total number of clusters: {total_cluster_count}")
-
         return total_clusters_labels
 
     # @tenacity.retry(stop=(tenacity.stop_after_delay(20) | tenacity.stop_after_attempt(5)))
     def cluster(
         self, embeddings: np.ndarray, n_components: int, n_neighbors: int = 10
     ) -> ClusterResult:
+
         # Reduce the dimensionality by UMAP
         reduced_embeddings = umap.UMAP(
             n_neighbors=n_neighbors,
@@ -124,11 +119,22 @@ class RAPTORClustering:
         probs = gmm.predict_proba(reduced_embeddings)
 
         # Given threshold, assign the cluster
-        clusters_array = np.array(
-            [np.where(prob >= self.threshold)[0] for prob in probs]
-        )  # (doc_size, 1)
+        # cluster_array = np.array(
+        #     [np.where(prob >= self.threshold)[0] for prob in probs]
+        # )  # (doc_size, 1)
 
-        return ClusterResult(clusters_array=clusters_array, n_clusters=n_clusters)
+        cluster_array = np.array(
+            [
+                (
+                    np.argmax(prob)
+                    if len(np.where(prob >= self.threshold)[0]) != 1
+                    else np.where(prob >= self.threshold)[0][0]
+                )
+                for prob in probs
+            ]
+        ).reshape(-1, 1)
+
+        return ClusterResult(cluster_array=cluster_array, n_clusters=n_clusters)
 
     def find_cluster_count(self, embeddings: np.ndarray) -> int:
         doc_size, _ = embeddings.shape
@@ -177,28 +183,18 @@ class RAPTORClustering:
 
 def run_clustering(
     nodes: list[Node],
-    reduction_component_size: int,
-    threshold: float,
-    random_state: int,
-    max_cluster_size: int,
-    max_tokens_per_cluster: int,
+    model: RAPTORClustering,
     tokenizer: tiktoken.Encoding,
+    max_tokens_per_cluster: int,
 ) -> list[Node]:
     """Runs the RAPTOR clustering algorithm on the given nodes."""
-    model = RAPTORClustering(
-        reduction_component_size=reduction_component_size,
-        threshold=threshold,
-        random_state=random_state,
-        max_cluster_size=max_cluster_size,
-    )
-
     # * Perform clustering
     embeddings = np.array([node.embeddings for node in nodes])
     cluster_labels = model(embeddings)
     n_cluster_labels = np.unique(np.concatenate(cluster_labels))
 
     result = []
-    for label in n_cluster_labels:
+    for label in tqdm(n_cluster_labels, desc="Clustering"):
         # Get the indices of the nodes that belong to this cluster
         indices = [
             idx for idx, cluster in enumerate(cluster_labels) if label in cluster
@@ -207,7 +203,7 @@ def run_clustering(
         # Add the corresponding nodes to the node_clusters list
         cluster_nodes = [nodes[idx] for idx in indices]
 
-        # Base case: if the cluster only has one node, do not attempt to recluster it
+        # Base case: if the cluster only has one node, do not attempt to re-cluster it
         if len(cluster_nodes) == 1:
             result.append(cluster_nodes)
             continue
@@ -219,11 +215,9 @@ def run_clustering(
             result.extend(
                 run_clustering(
                     nodes=cluster_nodes,
-                    reduction_component_size=reduction_component_size,
-                    threshold=threshold,
-                    random_state=random_state,
-                    max_cluster_size=max_cluster_size,
-                    max_token=max_tokens_per_cluster,
+                    model=model,
+                    tokenizer=tokenizer,
+                    max_tokens_per_cluster=max_tokens_per_cluster,
                 )
             )
             continue
