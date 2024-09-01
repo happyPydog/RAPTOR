@@ -1,4 +1,5 @@
 # python=3.12.2
+python-dotenv
 tqdm
 pydantic
 tenacity
