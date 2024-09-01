@@ -5,6 +5,7 @@ pydantic
 tenacity
 requests
 numpy
+rich
 
 tiktoken
 openai
