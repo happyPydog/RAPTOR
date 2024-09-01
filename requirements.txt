@@ -1,6 +1,10 @@
 # python=3.12.2
 tqdm
 pydantic
+tenacity
+requests
+numpy
+
 tiktoken
 openai
 llama-index

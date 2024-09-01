@@ -1,0 +1,14 @@
+isort
+black
+black[jupyter]
+flake8
+mypy
+pytest
+pytest-cov
+pytest-mock
+ipykernel
+ipywidgets
+
+# for arxiv
+arxiv
+pyMuPDF
