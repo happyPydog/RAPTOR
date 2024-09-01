@@ -1,3 +1,4 @@
+from typing import Literal
 from openai import OpenAI
 
 from raptor.node import Node
@@ -6,7 +7,7 @@ from raptor.node import Node
 def summarize_cluster_texts(
     llm: OpenAI,
     nodes: list[Node],
-    model_name: str = "gpt-4o",
+    model_name: Literal["gpt-3.5-turbo", "gpt-4o-mini", "gpt-4o"] = "gpt-3.5-turbo",
 ) -> str:
     """Summarize the cluster of nodes using the given language model."""
     # Extract the context from the nodes
