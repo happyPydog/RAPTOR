@@ -1,62 +1,115 @@
 """ArXiv paper helper functions."""
 
-import re
-import warnings
-
-from pydantic import BaseModel, Field, AnyHttpUrl
-
-import arxiv
+from __future__ import annotations
 import fitz
 import tempfile
-
-from raptor._internal._utils import ensure_ssl_verified
-
-
-# For downloading the document for demo purposes
-class ArXivPaper(BaseModel):
-    title: str = Field(..., description="Title of the paper")
-    text: str = Field(..., description="Text content of the paper")
-    url: AnyHttpUrl = Field(..., description="URL of the paper on ArXiv")
+import re
 
 
-def parse_arxiv_id(url: str) -> str | None:
-    """Parses the ArXiv ID from the given URL."""
-    arxiv_id = re.search(r"(\d{4}\.\d{4,5})(v\d+)?", url)
-    if not arxiv_id:
-        warnings.warn(f"Invalid ArXiv URL, skipping url: `{url}`.")
-        return None
-    return arxiv_id.group(1)
+from more_itertools import flatten
+from more_itertools import unique_everseen
+from typing import cast
+from collections.abc import Iterable
+from pathlib import Path
+
+import ssl
+
+from arxiv import Client as _ArxivClient
+from arxiv import Result as ArxivResult
+from arxiv import Search as ArxivSearch
+from pydantic import BaseModel
+from pydantic import AnyHttpUrl
 
 
-def fetch_papers(urls: str | list[str]) -> list[ArXivPaper]:
-    """Fetches and downloads an ArXiv paper from the given URL and returns its ArXivPaper object."""
-    client = arxiv.Client()
+class Paper(BaseModel):
+    title: str
+    text: str
+    url: AnyHttpUrl
+    references: list[Paper] | None = None
 
-    if isinstance(urls, str):
-        urls = [urls]
+    def flatten(self) -> list[Paper]:
+        papers = [self]
+        if self.references:
+            for paper in self.references:
+                papers.extend(paper.flatten())
+        return papers
 
-    # Ensure SSL certificate is verified
-    ensure_ssl_verified(urls[0])  # only check the first URL is enough
 
-    # Extract ArXiv ID from the URL
-    arxiv_ids = [
-        arxiv_id for url in urls if (arxiv_id := parse_arxiv_id(url)) is not None
-    ]
+class ArxivClient:
 
-    if not arxiv_ids:
-        raise ValueError(f"No valid ArXiv IDs found in the given URLs. urls: `{urls}`")
+    def __init__(self) -> None:
+        self.client = _ArxivClient()
 
-    # Fetch paper using ArXiv ID
-    search_query = arxiv.Search(id_list=arxiv_ids)
+        self.ensure_ssl_verified()
 
-    # Download the paper and extract text content
-    papers = []
-    for paper in client.results(search_query):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            pdf_path = paper.download_pdf(dirpath=temp_dir)
-            doc = fitz.open(pdf_path)
-            text = "".join([page.get_text() for page in doc])
+    def ensure_ssl_verified(url: str) -> None:
+        ssl._create_default_https_context = ssl._create_unverified_context
 
-        papers.append(ArXivPaper(title=paper.title, text=text, url=paper.entry_id))
+    def search(self, id_list: list[str]) -> Iterable[ArxivResult]:
+        search = ArxivSearch(id_list=id_list)
+        yield from self.client.results(search=search)
 
-    return papers
+    def extract_id(self, url: str) -> str | None:
+        match = re.search(r"(\d{4}\.\d{4,5})(v\d+)?", url)
+        return match.group(1) if match else None
+
+    def parse_references(self, text: str) -> list[str]:
+        arxiv_urls = re.findall(
+            r"(https?://arxiv\.org/abs/\d{4}\.\d{4,5}(v\d+)?)", text
+        )
+        return [match[0] for match in arxiv_urls]
+
+    def fetch_papers(self, urls: str | Iterable[str]) -> list[Paper]:
+        id_list = [self.extract_id(url) for url in urls]
+
+        papers = []
+        for paper in self.search(id_list):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                pdf_path = paper.download_pdf(dirpath=temp_dir)
+                doc = cast(fitz.Document, fitz.open(pdf_path))
+                text = "\n\n\n".join([page.get_text() for page in doc])  # type: ignore
+
+            papers.append(Paper(title=paper.title, text=text, url=paper.entry_id))
+
+        return papers
+
+    def fetch_papers_with_references(self, urls: Iterable[str]) -> list[Paper]:
+        parent_papers = self.fetch_papers(urls)
+
+        for paper in parent_papers:
+            reference_urls = self.parse_references(paper.text)
+            if reference_urls:
+                referenced_papers = self.fetch_papers(reference_urls)
+                paper.references = referenced_papers
+
+        return parent_papers
+
+    def download_papers(self, urls: str | Iterable[str], save_dir: str | Path) -> None:
+        id_list = [self.extract_id(url) for url in urls]
+
+        for paper in self.search(id_list):
+            filename = re.sub(r"[^\w]+", "_", paper.title) + ".pdf"
+            paper.download_pdf(dirpath=save_dir, filename=filename)
+
+
+arxiv_client = ArxivClient()
+
+
+def fetch_papers(
+    urls: str | Iterable[str], parse_reference: bool = False
+) -> list[Paper]:
+    urls = flatten([urls])
+
+    if parse_reference:
+        return arxiv_client.fetch_papers_with_references(urls)
+
+    return arxiv_client.fetch_papers(urls)
+
+
+def download_papers(urls: str | Iterable[str], save_dir: str | Path = "./") -> None:
+    urls = flatten([urls])
+    arxiv_client.download_papers(urls, save_dir)
+
+
+def extract_refs(papers: Iterable[Paper]) -> list[Paper]:
+    return list(unique_everseen(flatten([paper.flatten() for paper in papers])))
